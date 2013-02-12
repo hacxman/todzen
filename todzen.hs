@@ -14,13 +14,14 @@ import Control.Monad
 import Text.Regex.TDFA
 
 import Text.Printf
+import System.Process
 
 main = do
   dzen <- spawnPipe dzenCmd
   updateStatus dzen 0
 
 updateStatus hnd i = do
-  date <- runProcessWithInput "/usr/bin/date" [] ""
+  date <- readProcess "date" [] []
   (memT, memF) <- memUsage
   (loadavg, cpus) <- loadAvg
   let load_red = floor $ min 255 $ 155.0 + loadavg * (100.0 / fromIntegral cpus)
@@ -28,9 +29,12 @@ updateStatus hnd i = do
   hPutStrLn hnd $ Prelude.concatMap (wrap " " " ") $
     [dzenColor ("#"++showHex load_red "9999") "" $ printf "%.2f" loadavg
     ,dzenColor "#88dd22" "" $ hBar 50 10 memT (memT - memF)
-    ,dzenColor "#88dd22" "" $ printf "%.2f" ((fromIntegral (memT - memF) / (1024*1024.0)) :: Float) ++ "GiB"
+    ,dzenColor "#88dd22" ""
+    $ printf "%.2f" ((fromIntegral (memT - memF) / (1024*1024.0)) :: Float) ++ "GiB"
     ,dzenColor "#ffffff" "" $ dzenEscape $ trim date]
+
   threadDelay (seconds 1)
+  putStrLn $ "### WOLOLO " ++ show i
   updateStatus hnd $ i+1
 
 hBar w h max val =
@@ -45,31 +49,23 @@ style   = " -h '16' -fg '#777777' -bg '#222222' -fn 'arial:bold:size=9'"
 
 loadAvg :: IO (Float, Int)
 loadAvg = do
-  liftM2 (,) (withFile "/proc/loadavg" ReadMode extractUsage)
-             (withFile "/proc/cpuinfo" ReadMode extractCPUCount)
+  liftM2 (,) (extractor  "/proc/loadavg" extractUsage)
+             (extractor "/proc/cpuinfo" extractCPUCount)
   where
-     extractUsage hnd = do
-                    con <- hGetContents hnd
-                    ln <- return $ length con
-                    [[_,loadavg]] <- con =~~ "^([0-9]*\\.[0-9]*).*$" :: IO [[String]]
-                    return $ read loadavg
+    extractUsage con = read loadavg
+      where [[_,loadavg]] = con =~ "^([0-9]*\\.[0-9]*).*$" :: [[String]]
 
-     extractCPUCount hnd = do
-                    con <- hGetContents hnd
-                    ln <- return $ length con
-                    cpus <- con =~~ "^processor.*:\\ [0-9]*.*$" :: IO [[String]]
-                    return $ length cpus
+    extractCPUCount con = length cpus
+      where cpus = con =~ "^processor.*:\\ [0-9]*.*$" :: [[String]]
 
 memUsage :: IO (Int, Int) -- max, current
 memUsage = do
-  withFile "/proc/meminfo" ReadMode extractUsage
+  extractor "/proc/meminfo" extractUsage
   where
-    extractUsage hnd = do
-      con <- hGetContents hnd
-      ln <- return $ length con
-      [[_,_,mem_total]] <- con =~~ "^(MemTotal):\\ *([0-9]*).*$" :: IO [[String]]
-      [[_,_,mem_free ]] <- con =~~ "^(MemFree):\\ *([0-9]*).*$" :: IO [[String]]
-      return (read mem_total, read mem_free)
+    extractUsage con =
+      let [[_,_,mem_total]] = con =~ "^(MemTotal):\\ *([0-9]*).*$" :: [[String]]
+          [[_,_,mem_free ]] = con =~ "^(MemFree):\\ *([0-9]*).*$" :: [[String]] in
+        (read mem_total, read mem_free)
 
 extractor filename fun = do
   withFile filename ReadMode fn
@@ -77,4 +73,5 @@ extractor filename fun = do
     fn hnd = do
       con <- hGetContents hnd
       ln <- return $ length con
-      return $ fun con
+      print ln
+      return $ fun (con)
