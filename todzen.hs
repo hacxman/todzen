@@ -1,4 +1,3 @@
-
 import System.Posix.Env (getEnv)
 import Data.Maybe (maybe)
 
@@ -26,10 +25,34 @@ updateStatus hnd i = do
   (loadavg, cpus) <- loadAvg
   let load_red = floor $ min 255 $ 155.0 + loadavg * (100.0 / fromIntegral cpus)
 
+  (bat, ac, batcap) <- batInfo
+  let ac_bat_string' = show bat ++ " " ++ show ac
+  let ac_bat_string'' | ac == Online = "AC " ++
+                        case bat of Unknown  -> "C"
+                                    Charging -> "C"
+                                    Full     -> "F"
+                                    _        -> "Err"
+                    | ac == Offline =
+                        case bat of Discharging -> "D"
+                                    Full        -> "F"
+                                    Empty       -> "E"
+                                    _        -> "Err"
+
+  let ac_bat_string | ac == Online = "AC " ++ (head $ show bat) : []
+                    | ac == Offline = (head $ show bat) : []
+
+  vol <- volume
   hPutStrLn hnd $ Prelude.concatMap (wrap " " " ") $
-    [dzenColor ("#"++showHex load_red "9999") "" $ printf "%.2f" loadavg
-    ,dzenColor "#88dd22" "" $ hBar 50 10 memT (memT - memF)
-    ,dzenColor "#88dd22" ""
+--  putStrLn $ Prelude.concatMap (wrap " " " ") $
+    [dzenColor "#cccc22" "" (clicable (dzenEscape " - ") "5" "0x1008FF11")
+    ++"/"++dzenColor "#cccc22" "" (clicable (dzenEscape " + ") "4" "0x1008FF13")
+    ++dzenColor "#cccc22" "" (hBar 50 10 100 (floor $ 100*vol))
+    ,dzenColor "#cccc22" "" $ show $ floor (vol*100)
+    ,dzenColor "#cc7722" "" $ hBar 50 10 100 (floor $ 100*batcap)
+    ,dzenColor "#cc7722" "" $ ac_bat_string ++ " " ++ show (floor $ 100*batcap) ++ "%"
+    ,dzenColor ("#"++showHex load_red "9999") "" $ printf "%.2fL" loadavg
+    ,dzenColor "#77bb22" "" $ hBar 50 10 memT (memT - memF)
+    ,dzenColor "#77bb22" ""
     $ printf "%.2f" ((fromIntegral (memT - memF) / (1024*1024.0)) :: Float) ++ "GiB"
     ,dzenColor "#ffffff" "" $ dzenEscape $ trim date]
 
@@ -37,15 +60,26 @@ updateStatus hnd i = do
   putStrLn $ "### WOLOLO " ++ show i
   updateStatus hnd $ i+1
 
+clicable :: String -> String -> String -> String
+clicable l b key = "^ca("++b++",xdotool key "++key++")"++l++"^ca()"
+
 hBar w h max val =
       "^ib(1)^ro("++show w++"x10)^p(-"++show (w-2)++")^r("
-      ++ show pixval ++"x6)"
-      ++ "^p(+" ++ show (w-pixval) ++ ")^ib(0)"
+      ++ show (pixval-4) ++"x6)"
+      ++ "^p(+" ++ show (w-pixval+2) ++ ")^ib(0)"
   where
     pixval = floor (fromIntegral w * (fromIntegral val / fromIntegral max))
 
 dzenCmd = "dzen2 -x '600' -w '800' -ta 'r'" ++ style
 style   = " -h '16' -fg '#777777' -bg '#222222' -fn 'arial:bold:size=9'"
+
+volume :: IO Float
+volume = do
+  con <- readProcess "amixer" ["-c", "0", "sget", "Master"] []
+  return $ extractVol con
+  where
+    extractVol con = ((/100).read) (vol++".0")
+      where [[_,vol]] = con =~ "^.*Playback.*\\[([0-9]*)%\\].*$" :: [[String]]
 
 loadAvg :: IO (Float, Int)
 loadAvg = do
@@ -66,6 +100,17 @@ memUsage = do
       let [[_,_,mem_total]] = con =~ "^(MemTotal):\\ *([0-9]*).*$" :: [[String]]
           [[_,_,mem_free ]] = con =~ "^(MemFree):\\ *([0-9]*).*$" :: [[String]] in
         (read mem_total, read mem_free)
+
+data BatState = Discharging | Charging | Full | Empty | Unknown
+  deriving (Show, Read, Eq)
+data ACState  = Offline | Online
+  deriving (Show, Read, Enum, Eq)
+
+batInfo :: IO (BatState, ACState, Float)
+batInfo = liftM3 (,,)
+  (extractor "/sys/class/power_supply/BAT0/status" (read))
+  (extractor "/sys/class/power_supply/AC/online" (toEnum.read))
+  (extractor "/sys/class/power_supply/BAT0/capacity" ((/100).fromIntegral.read))
 
 extractor filename fun = do
   withFile filename ReadMode fn
