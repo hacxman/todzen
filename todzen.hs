@@ -15,6 +15,12 @@ import Text.Regex.TDFA
 import Text.Printf
 import System.Process
 
+import Control.Exception
+import System.IO.Error
+
+cpu_core_files = ["/sys/class/hwmon/hwmon" ++ show x ++ "/temp1" | x <- [0..2]]
+cpu_core_bias = 35.0
+
 main = do
   dzen <- spawnPipe dzenCmd
   updateStatus dzen 0
@@ -24,7 +30,8 @@ updateStatus hnd i = do
   (memT, memF) <- memUsage
   (loadavg, cpus) <- loadAvg
   let load_red = floor $ min 255 $ 155.0 + loadavg * (100.0 / fromIntegral cpus)
-
+  (core_temp, core_max) <- coreTemp
+  let core_temp_red = floor $ min 255 $ 155.0 + (max 0.0 $ 100 * ((core_temp-cpu_core_bias) / (core_max-cpu_core_bias)))
 
 --  (bat, ac, batcap) <- batInfo
 --  let ac_bat_string' = show bat ++ " " ++ show ac
@@ -56,6 +63,7 @@ updateStatus hnd i = do
     ,dzenColor "#77bb22" "" $ hBar 50 10 memT (memT - memF)
     ,dzenColor "#77bb22" ""
     $ printf "%.2f" ((fromIntegral (memT - memF) / (1024*1024.0)) :: Float) ++ "GiB"
+    ,dzenColor ("#"++showHex core_temp_red "aa77") "" $ printf "%.1fC" core_temp
     ,dzenColor "#ffffff" "" $ dzenEscape $ trim date]
 
   threadDelay (seconds 1)
@@ -86,8 +94,8 @@ volume = do
 
 loadAvg :: IO (Float, Int)
 loadAvg = do
-  liftM2 (,) (extractor  "/proc/loadavg" extractUsage)
-             (extractor "/proc/cpuinfo" extractCPUCount)
+  liftM2 (,) (extractor ["/proc/loadavg"] extractUsage)
+             (extractor ["/proc/cpuinfo"] extractCPUCount)
   where
     extractUsage con = read loadavg
       where [[_,loadavg]] = con =~ "^([0-9]*\\.[0-9]*).*$" :: [[String]]
@@ -97,7 +105,7 @@ loadAvg = do
 
 memUsage :: IO (Int, Int) -- max, current
 memUsage = do
-  extractor "/proc/meminfo" extractUsage
+  extractor ["/proc/meminfo"] extractUsage
   where
     extractUsage con =
       let [[_,_,mem_total]] = con =~ "^(MemTotal):\\ *([0-9]*).*$" :: [[String]]
@@ -111,12 +119,22 @@ data ACState  = Offline | Online
 
 batInfo :: IO (BatState, ACState, Float)
 batInfo = liftM3 (,,)
-  (extractor "/sys/class/power_supply/BAT0/status" (read))
-  (extractor "/sys/class/power_supply/AC/online" (toEnum.read))
-  (extractor "/sys/class/power_supply/BAT0/capacity" ((/100).fromIntegral.read))
+  (extractor ["/sys/class/power_supply/BAT0/status",
+              "/sys/class/power_supply/BAT2/status"] (read))
+  (extractor ["/sys/class/power_supply/AC/online"] (toEnum.read))
+  (extractor ["/sys/class/power_supply/BAT0/capacity",
+              "/sys/class/power_supply/BAT2/capacity"] ((/100).fromIntegral.read))
 
-extractor filename fun = do
-  withFile filename ReadMode fn
+coreTemp :: IO (Float, Float)
+coreTemp = liftM2 (,)
+  (extractor [(cpu_core_file ++ "_input") | cpu_core_file <- cpu_core_files] ((/1000).fromIntegral.read))
+  (extractor [(cpu_core_file ++ "_max"  ) | cpu_core_file <- cpu_core_files] ((/1000).fromIntegral.read))
+
+extractor [] fun = return $ fun "0"
+extractor (filename:filenames) fun = do
+  handleJust (\ x -> Just $ isDoesNotExistError x)
+             (\ _ -> print ("cant open " ++ filename) >> extractor filenames fun)
+             (withFile filename ReadMode fn)
   where
     fn hnd = do
       con <- hGetContents hnd
