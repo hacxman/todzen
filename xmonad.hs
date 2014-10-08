@@ -28,62 +28,79 @@ import Control.Concurrent
 import XMonad.Hooks.EwmhDesktops
 
 import XMonad.Util.Loggers
-import XMonad.Layout.Tabbed
-import XMonad.Layout.TabBarDecoration
+import XMonad.Util.Run
+import Numeric
+
+import XMonad.Util.WorkspaceCompare (getSortByIndex)
+import XMonad.StackSet (view)
 
 main = do
      status <- spawnPipe myDzenStatus    -- xmonad status on the left
-     safeSpawnProg "/home/mzatko/.xmonad/todzen"
 --     conky  <- spawnPipe myDzenConky     -- conky stats on the right
+--     rightDzen <- spawnPipe myDzenRight
+     safeSpawnProg "/home/mzatko/.xmonad/todzen"
      session <- getEnv "DESKTOP_SESSION"
-     safeSpawnProg "stalonetray"
-     safeSpawnProg "nm-applet"
-     safeSpawnProg "xscreensaver"
-     safeSpawnProg "/usr/libexec/lxpolkit"
+     forkIO $ safeSpawnProg "stalonetray"
+     forkIO $ safeSpawnProg "nm-applet"
+     forkIO $ safeSpawnProg "xscreensaver"
+--     forkIO $ safeSpawnProg "/usr/libexec/polkit-gnome-authentication-agent-1"
+     forkIO $ safeSpawnProg "/usr/libexec/lxpolkit"
      xmonad $ ewmh $ withUrgencyHook NoUrgencyHook $ maybe desktopConfig (desktop status) session
+
+usageToDzen hnd i = do
+     date <- runProcessWithInput "/usr/bin/date" [] ""
+--     let date = "ko ok ti ina"
+
+     --safeSpawnProg $ "/usr/bin/xmessage \"" ++ date ++ "\""
+     hPutStrLn hnd $ concatMap (wrap " " " ") $
+                  [dzenColor ("#"++showHex (150+i) "9999") "" $ show i]
+                  --,dzenColor "#ffffff" "" $ dzenEscape date]
+     threadDelay (seconds 1)
+     usageToDzen hnd $ i+1
 
 desktop _ "gnome" = gnomeConfig
 desktop _ "kde" = kde4Config
 desktop _ "xfce" = xfceConfig
 desktop _ "xmonad-gnome" = gnomeConfig
-desktop status _ = let cnf = defaultConfig { modMask = mod4Mask
+desktop status _ = let cnf = desktopConfig { modMask = mod4Mask
                           , manageHook = manageDocks <+> myManageHook
                                          <+> manageHook defaultConfig
                           , workspaces = myWorkspaces
                           , logHook    = myLogHook status
                           , layoutHook = avoidStruts $ {-smartBorders $-} myLayoutHook
---                          , eventHook = myEventHook
                           , terminal = "xfce4-terminal"} in
             cnf `additionalKeys` (myKeys cnf)
 
 -- Layouts
 -- the default layout is fullscreen with smartborders applied to all
-myLayoutHook =  tiled ||| mtiled ||| full -- Full
+myLayoutHook = (tiled) ||| mtiled ||| full
   where
-    --full    = simpleTabbed ||| Full
     full    = Full
     mtiled  = Mirror tiled
     tiled   = Tall 1 (3/100) (1/2) --Tall 1 (5/100) (2/(1+(toRational(sqrt(5)::Double))))
     -- sets default tile as: Tall nmaster (delta) (golden ratio)
 
--- myEventHook event = return (All True)
+myNextWS = findWorkspace getSortByIndex Next AnyWS 1 >>= mySWWS
+myPrevWS = findWorkspace getSortByIndex Next AnyWS (-1) >>= mySWWS
+mySWWS = windows . view
 
 myKeys conf@(XConfig {XMonad.modMask = modm}) =
-              [((modm, xK_Right)               , nextWS)
-              ,((modm, xK_Left)                , prevWS)
+              [((modm, xK_Right)               , myNextWS)
+              ,((modm, xK_Left)                , myPrevWS)
               ,((modm, xK_Escape)              , toggleWS)
               ,((modm, xK_Return)              , spawn $ XMonad.terminal conf)
               ,((modm .|. shiftMask, xK_Return), windows W.swapMaster)
               ,((modm, xK_m)                   , withFocused (sendMessage . maximizeRestore))
-              ,((modm,  xK_g ),   withFocused toggleBorder)
+              ,((modm, xK_g)                   , withFocused toggleBorder)
+              ,((modm, xK_k)                   , windows W.focusDown) -- %! Move focus to the next window
+              ,((modm, xK_j)                   , windows W.focusUp  ) -- %! Move focus to the previous window
               ,((mod1Mask.|.controlMask, xK_l) , spawn "xscreensaver-command --lock")
               ,((0                     , 0x1008FF03), spawn "xbacklight -dec 10 -steps 1")
               ,((0                     , 0x1008FF02), spawn "xbacklight -inc 10 -steps 1")
               ,((0                     , 0x1008FF11), spawn "amixer -c 0 -- sset Master playback 2dB-")
               ,((0                     , 0x1008FF13), spawn "amixer -c 0 -- sset Master playback 2dB+")
               ,((0                     , 0x1008FF12), spawn "amixer --set Master toggle")
-              ,((0                     , 0x1008ffb2), spawn "dbus-send --system --print-reply --dest=org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager.Suspend boolean:true")]
---              ,((0                     , 0x1008ff2f), spawn "dbus-send --system --print-reply --dest=\"org.freedesktop.UPower\"  /org/freedesktop/UPower org.freedesktop.UPower.Suspend")]
+              ,((0                     , 0x1008ff2f), spawn "dbus-send --system --print-reply --dest=\"org.freedesktop.UPower\"  /org/freedesktop/UPower org.freedesktop.UPower.Suspend")]
               --,((mod1Mask.|.controlMask, xK_l) , spawn "gnome-screensaver-command --lock")]
 
 
@@ -98,7 +115,6 @@ myManageHook = composeAll
 --    , className =? "Nautilus"       --> doF (W.shift (myWorkspaces !! 2)) -- send to ws 3
 --    , className =? "Gimp"           --> doF (W.shift (myWorkspaces !! 3)) -- send to ws 4
     , className =? "stalonetray"    --> doIgnore
-    , className =? "eekboard"    --> doFloat
     ]
 
 -- Statusbar
@@ -107,7 +123,7 @@ myLogHook h = dynamicLogWithPP $ myDzenPP { ppOutput = hPutStrLn h }
 
 
 myWorkspaces            :: [String]
-myWorkspaces            = clickable . (map (dzenEscape.wrap " " " ")) $ ["1","2","3","4","5","6","7","8","9"]
+myWorkspaces            = clickable . (map (dzenEscape.wrap " " " ")) $ ["w1","w2","c1","c2","5","6","7","m","im"]
 
   where clickable l     = [ "^ca(1,xdotool key super+" ++ trim (show (n)) ++ ")" ++ ws ++ "^ca()" |
                             (i,ws) <- zip [1..] l,
@@ -116,8 +132,9 @@ myWorkspaces            = clickable . (map (dzenEscape.wrap " " " ")) $ ["1","2"
 
 --myDzenStatus = "dzen2 -w '732' -ta 'l'" ++ myDzenStyle
 --myDzenConky  = "conky -c ~/.xmonad/conkyrc | dzen2 -x '732' -w '708' -ta 'r'" ++ myDzenStyle
-myDzenStatus = "dzen2 -w '600' -ta 'l' " ++ myDzenStyle
-myDzenConky  = "conky -c ~/.xmonad/conkyrc | dzen2 -x '600' -w '700' -ta 'c'" ++ myDzenStyle
+myDzenStatus = "dzen2 -w '1000' -ta 'l' " ++ myDzenStyle
+myDzenConky  = "conky -c ~/.xmonad/conkyrc | dzen2 -x '1000' -w '850' -ta 'r'" ++ myDzenStyle
+myDzenRight  = "dzen2 -x '1000' -w '850' -ta 'r'" ++ myDzenStyle
 myDzenStyle  = " -h '16' -fg '#777777' -bg '#222222' -fn 'arial:bold:size=9'"
 
 
@@ -132,6 +149,6 @@ myDzenPP  = dzenPP
     , ppTitle   = dzenColor "#ffffff" ""
                     . wrap "^ca(1,xdotool key super+k)^ca(2,xdotool key super+shift+c)"
                            "                          ^ca()^ca()" . shorten 80 . dzenEscape
---    , ppExtras = [ padL loadAvg, logCmd "fortune -n 40 -s" ]
+--    , ppExtras = [ logCmd "fortune -n 40 -s" ]
     }
 
