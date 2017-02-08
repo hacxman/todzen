@@ -23,9 +23,9 @@ cpu_core_bias = 35.0
 
 main = do
   dzen <- spawnPipe dzenCmd
-  updateStatus dzen 0
+  updateStatus dzen 0 ""
 
-updateStatus hnd i = do
+updateStatus hnd i eur_rub = do
   date <- readProcess "date" [] []
   (memT, memF) <- memUsage
   (loadavg, cpus) <- loadAvg
@@ -51,9 +51,11 @@ updateStatus hnd i = do
 
   vol <- volume
   print vol
+  eurrub <- if i `mod` 30 == 0 then readProcess "eurrub" [] [] else return eur_rub
   hPutStrLn hnd $ Prelude.concatMap (wrap " " " ") $
 --  putStrLn $ Prelude.concatMap (wrap " " " ") $
-    [dzenColor "#cccc22" "" (clicable (dzenEscape " - ") "5" "0x1008FF11")
+    [dzenColor ("#cc"++printf "%02i" (3*(i `mod` 30) :: Int)++"22") "" $ dzenEscape $ trim eurrub
+    ,dzenColor "#cccc22" "" (clicable (dzenEscape " - ") "5" "0x1008FF11")
     ++"/"++dzenColor "#cccc22" "" (clicable (dzenEscape " + ") "4" "0x1008FF13")
     ++dzenColor "#cccc22" "" (hBar 50 10 100 (floor $ 100*vol))
     ,dzenColor "#cccc22" "" $ show $ floor (vol*100)
@@ -68,7 +70,7 @@ updateStatus hnd i = do
 
   threadDelay (seconds 1)
   putStrLn $ "### WOLOLO " ++ show i
-  updateStatus hnd $ i+1
+  updateStatus hnd (i+1) eurrub
 
 clicable :: String -> String -> String -> String
 clicable l b key = "^ca("++b++",xdotool key "++key++")"++l++"^ca()"
@@ -80,17 +82,20 @@ hBar w h max val =
   where
     pixval = floor (fromIntegral (w - 4) * (fromIntegral val / fromIntegral max))
 
-dzenCmd = "dzen2 -x '600' -w '1250' -ta 'r'" ++ style
-style   = " -h '16' -fg '#777777' -bg '#222222' -fn 'arial:bold:size=9'"
+--dzenCmd = "dzen2 -x '650' -w '590' -ta 'r'" ++ style
+--dzenCmd = "dzen2 -y 2536 -x '2500' -w '1280' -ta 'r'" ++ style
+dzenCmd = "dzen2 -x '2500' -w '1280' -ta 'r'" ++ style
+style   = " -h '24' -fg '#777777' -bg '#222222' -fn 'arial:bold:size=16'"
 
 volume :: IO Float
 volume = do
   con <- readProcess "amixer" ["sget", "Master"] []
-  --print $ (con =~ "^.*Playback.*\\[([0-9]*)%\\].*$" :: [[String]])
+  --con <- readProcess "amixer" ["-c", "0", "sget", "Master"] []
+  print $ (con =~ "^.*Playback.*\\[([0-9]*)%\\].*$" :: [[String]])
   return $ extractVol con
   where
     extractVol con = ((/100).read) (vol++".0")
-      where [[_,vol],_] = con =~ "^.*Playback.*\\[([0-9]*)%\\].*$" :: [[String]]
+      where [_,vol] : _ = con =~ "^.*Playback.*\\[([0-9]*)%\\].*$" :: [[String]]
 
 loadAvg :: IO (Float, Int)
 loadAvg = do
